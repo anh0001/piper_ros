@@ -1,11 +1,11 @@
 # piper_launch.py
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, GroupAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.actions import IncludeLaunchDescription  # Correct import method
-from launch_ros.actions import Node  # Remains unchanged
+from launch_ros.actions import Node, SetRemap  # Added SetRemap
 from ament_index_python.packages import get_package_share_directory
 
 import os
@@ -16,8 +16,8 @@ def generate_launch_description():
     piper_description_path = os.path.join(
         get_package_share_directory('piper_description'),
         'launch',
-        'piper_with_gripper',
-        'display_xacro.launch.py'
+        'piper_no_gripper',
+        'display_no_gripper_xacro.launch.py'
     )
 
     # Define launch parameters
@@ -33,9 +33,15 @@ def generate_launch_description():
         description='Enable robot arm automatically'
     )
 
-    # Include display_xacro.launch.py
-    display_xacro_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(piper_description_path)
+    # Include display_xacro.launch.py with remapping
+    display_xacro_launch = GroupAction(
+        actions=[
+            # Remap every /joint_states -> /joint_commands in this group
+            SetRemap(src='joint_states', dst='joint_commands'),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(piper_description_path)
+            )
+        ]
     )
 
     rviz_ctrl_flag_arg = DeclareLaunchArgument(
