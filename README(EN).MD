@@ -25,9 +25,9 @@ The default URDF is now the latter
 |current version < S-V1.6-3|`piper_description_old.urdf`|
 |current version >= S-V1.6-3|`piper_description.urdf`|
 
-## Installation
+## 1 Installation
 
-### Install dependencies
+### 1.1 Install dependencies
 
 ```shell
 pip3 install python-can
@@ -44,93 +44,161 @@ sudo apt install ros-$ROS_DISTRO-ros2-controllers
 sudo apt install ros-$ROS_DISTRO-controller-manager
 ```
 
-## Quick Start
+## 2 Use CAN Module
 
-### Enable CAN module
+Note: The CAN module here only supports the robot arm's built-in CAN module, and does not support other CAN modules.
 
-First, you need to set up the shell script parameters.
+Install CAN tools
 
-#### Single robotic arm
+```bash
+sudo apt update && sudo apt install can-utils ethtool
+```
 
-##### PC with Only One USB-to-CAN Module Inserted
+These two tools are used to configure the CAN module.
 
-- **Use the `can_activate.sh`**
+If executing the bash script shows `ip: command not found`, install the `ip` command by running `sudo apt-get install iproute2`
 
-Directly run:
+### 2.1 Find CAN Modules
+
+Run the following command:
+
+```bash
+bash find_all_can_port.sh
+```
+
+Enter the password, and if the CAN module is inserted into the computer and detected, it will output something like:
+
+```bash
+Both ethtool and can-utils are installed.
+Interface can0 is connected to USB port 3-1.4:1.0
+```
+
+If there are multiple modules, the output will look like this:
+
+```bash
+Both ethtool and can-utils are installed.
+Interface can0 is connected to USB port 3-1.4:1.0
+Interface can1 is connected to USB port 3-1.1:1.0
+```
+
+For each CAN module, there will be a corresponding output like `Interface can1 is connected to USB port 3-1.1:1.0`
+
+Where `can1` is the name of the CAN module detected by the system, and `3-1.1:1.0` is the USB port it is connected to.
+
+If the CAN module has already been activated with a different name, for example `can_piper`, the output will look like:
+
+```bash
+Both ethtool and can-utils are installed.
+Interface can_piper is connected to USB port 3-1.4:1.0
+Interface can0 is connected to USB port 3-1.1:1.0
+```
+
+If no CAN module is detected, only the following will be output:
+
+```bash
+Both ethtool and can-utils are installed.
+```
+
+### 2.2 Activate a Single CAN Module (use can_activate.sh script)
+
+There are two situations for activating a single CAN module: one is when only one CAN module is connected to the PC, and the other is when multiple CAN modules are inserted, but only one is activated.
+
+#### 2.2.1 PC has only one USB-to-CAN module connected
+
+Simply execute:
 
 ```bash
 bash can_activate.sh can0 1000000
 ```
 
-##### PC with Multiple USB-to-CAN Modules Inserted
+Here, `can0` can be replaced with any name, and `1000000` is the baud rate, which cannot be changed.
 
-**Use the `can_activate.sh`**
+#### 2.2.2 PC has multiple USB-to-CAN modules connected, but only one module is activated at a time
 
-Disconnect all CAN modules.
+Note: This case applies when using both the robot arm and the chassis.
 
-Only connect the CAN module linked to the robotic arm to the PC, and then run the script.
+(1) Find the USB hardware address of the CAN module. Unplug all CAN modules and plug in only the one connected to the robot arm, then execute:
 
 ```shell
-sudo ethtool -i can0 | grep bus
+bash find_all_can_port.sh
 ```
 
-and record the `bus-info` value, for example, `1-2:1.0`.
+Record the USB port value, for example, 3-1.4:1.0.
 
-**Note: Generally, the first inserted CAN module defaults to `can0`. If the CAN interface is not found, use `bash find_all_can_port.sh` to check the CAN names corresponding to the USB addresses.**
-
-Assuming the recorded `bus-info` value from the above operation is `1-2:1.0`.
-
-Then execute the command to check if the CAN device has been successfully activated.
+(2) Activate the CAN device. Assuming the USB port value is 3-1.4:1.0, run:
 
 ```bash
-bash can_activate.sh can_piper 1000000 "1-2:1.0"
+bash can_activate.sh can_piper 1000000 "3-1.4:1.0"
 ```
 
-**Note: This means that the CAN device connected to the USB port with hardware encoding `1-2:1.0` is renamed to `can_piper`, set to a baud rate of 1,000,000, and activated.**
+Explanation: **3-1.4:1.0 is the hardware-encoded USB port, and the CAN device inserted there is renamed as can_piper, with a baud rate of 1000000 and activated.**
 
-Then run`ifconfig` to check if `can_piper` appears. If it does, the CAN module has been successfully configured.
+(3) Check if activation was successful by running `ifconfig` to see if `can_piper` appears. If it does, the CAN module is configured successfully.
 
-#### Enable multiple CAN modules
+### 2.3 Activate Multiple CAN Modules Simultaneously (use can_muti_activate.sh script)
 
-**Use the `can_config.sh`  here**
+First, determine how many official CAN modules are plugged into the PC (assumed here as 2).
 
-In the `can_config.sh`, the `EXPECTED_CAN_COUNT` shows the number of the CAN modules you want to activate. Assume it's 2 here.
+Note: **If the current computer has 5 CAN modules inserted, you can only activate the specified CAN module**
 
-Then, insert one of the two CAN modules into the PC alone and run the script.
+#### 2.3.1 Record the USB port hardware address of each CAN module
+
+For each CAN module, unplug and reinsert it while recording the corresponding USB port address.
+
+In the `can_muti_activate.sh` file, the `EXPECTED_CAN_COUNT` parameter should be set to the desired number of activated CAN modules (assumed here as 2).
+
+(1) Plug in one CAN module and run:
 
 ```shell
-sudo ethtool -i can0 | grep bus
+bash find_all_can_port.sh
 ```
 
-and record the `bus-info` value, for example, `1-2:1.0`.
+Record the `USB port` value, for example, `3-1.4:1.0`
 
-Next, insert the second CAN module, ensuring it is connected to a different USB port than the one used previously, and then execute the script.
+(2) Plug in the next CAN module. Ensure **it is not inserted into the same USB port as the previous one** and run:
 
 ```shell
-sudo ethtool -i can1 | grep bus
+bash find_all_can_port.sh
 ```
 
-**Note: Generally, the first inserted CAN module defaults to `can0`, and the second one to `can1`. If the CAN interfaces are not found, use `bash find_all_can_port.sh` to check the CAN names corresponding to the USB addresses.**
+Record the value of the second CAN module's `USB port`, for example `3-1.1:1.0`
 
-Assuming the recorded `bus-info` values are `1-2:1.0` and `1-4:1.0`, replace the parameters inside the double quotes in `USB_PORTS["1-9:1.0"]="can_left:1000000"` with `1-2:1.0`.
+Note: **If not previously activated, the first module will default to "can0," and the second will be "can1." If previously activated, the names will be the ones used before.**
 
-Similarly, update the other one
+#### 2.3.2 Predefine USB ports, target interface names, and their bitrates
 
-`USB_PORTS["1-5:1.0"]="can_right:1000000"` -> `USB_PORTS["1-4:1.0"]="can_right:1000000"`
+Assume the recorded `USB port` values are `3-1.4:1.0` and `3-1.1:1.0`. Replace the values inside the brackets in `USB_PORTS["1-9:1.0"]="can_left:1000000"` with `3-1.4:1.0` and `3-1.1:1.0`.
 
-**Note: This means that the CAN device connected to the USB port with hardware encoding `1-2:1.0` is renamed to `can_left`, set to a baud rate of 1,000,000, and activated.**
-
-Then execute `bash can_config.sh` and check the terminal output to see if the activation was successful.
-
-Afterward, run `ifconfig` to verify if `can_left` and `can_right` appear. If they do, the CAN modules have been successfully configured.
-
-### Start the Node
+The final result is:
 
 ```shell
+USB_PORTS["3-1.4:1.0"]="can_left:1000000"
+USB_PORTS["3-1.1:1.0"]="can_right:1000000"
+```
+
+Explanation: **3-1.4:1.0 is the hardware-encoded USB port, the CAN device inserted there is renamed to "can_left," with a baud rate of 1000000, and activated.**
+
+#### 2.3.3 Activate multiple CAN modules
+
+Run the script:
+
+```bash
+bash can_muti_activate.sh
+```
+
+#### 2.3.4 Check if multiple CAN modules were set up successfully
+
+Run `ifconfig` to check if `can_left` and `can_right` are present.
+
+## 3 Start the Node
+
+```shell
+cd piper_ros
 colcon build
+source install/setup.bash
 ```
 
-#### Single robotics arm
+### 3.1 Single robotics arm
 
 Node name: `piper_single_ctrl`
 
@@ -220,23 +288,7 @@ ros2 topic pub /joint_states sensor_msgs/msg/JointState "{header: {stamp: {sec: 
 
 ```
 
-## Note
-
-- You need to activate the CAN device and set the correct baud rate before you can read messages from or control the robotic arm.
-
-- If the following appears:
-
-  ```shell
-  Enable state: False
-  <class 'can.exceptions.CanError'> Message NOT sent
-  <class 'can.exceptions.CanError'> Message NOT sent
-  ```
-
-  This indicates that the robotic arm is not connected to the CAN module. Unplug and re-plug the USB, restart the robotic arm, reactivate the CAN module, and then try restarting the node.
-
-- If automatic enabling is turned on and enabling is not successful within 5 seconds, the program will automatically exit.
-
-### piper Custom Messages
+### 3.2 piper Custom Messages
 
 ros package `piper_msgs`
 
@@ -330,6 +382,22 @@ float64 gripper
 int32 mode1
 int32 mode2
 ```
+
+## Note
+
+- You need to activate the CAN device and set the correct baud rate before you can read messages from or control the robotic arm.
+
+- If the following appears:
+
+  ```shell
+  Enable state: False
+  <class 'can.exceptions.CanError'> Message NOT sent
+  <class 'can.exceptions.CanError'> Message NOT sent
+  ```
+
+  This indicates that the robotic arm is not connected to the CAN module. Unplug and re-plug the USB, restart the robotic arm, reactivate the CAN module, and then try restarting the node.
+
+- If automatic enabling is turned on and enabling is not successful within 5 seconds, the program will automatically exit.
 
 ## MoveIt Planner and Simulation Environment
 

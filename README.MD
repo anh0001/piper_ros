@@ -1,6 +1,7 @@
 # piper 机械臂ROS(humble)
 
 ![ubuntu](https://img.shields.io/badge/Ubuntu-22.04-orange.svg)
+![bash](https://img.shields.io/badge/bash-green.svg)
 
 [EN](README(EN).MD)
 
@@ -20,6 +21,11 @@ git clone https://github.com/agilexrobotics/piper_ros.git
 cd piper_ros
 git checkout humble
 ```
+
+|说明 |文档|
+|---|---|
+|Moveit|[Moveit README](src/piper_moveit/README.md)|
+|仿真|[仿真 README](src/piper_sim/README.md)|
 
 ## 0 注意URDF版本
 
@@ -55,13 +61,66 @@ sudo apt install ros-$ROS_DISTRO-ros2-controllers
 sudo apt install ros-$ROS_DISTRO-controller-manager
 ```
 
-## 2 快速使用
+## 2 使用can模块
 
-### 2.1 使能can模块
+注意此处的can模块仅支持机械臂自带的can模块，不支持其它can模块
 
-#### 2.1.1 激活单个can模块, **此处使用`can_activate.sh`脚本**
+安装can工具
 
-##### 1) pc只插入一个usb转can模块
+```shell
+sudo apt update && sudo apt install can-utils ethtool
+```
+
+这两个工具用于配置 CAN 模块
+
+如果执行bash脚本出现`ip: command not found`，请安装ip指令，一般是`sudo apt-get install iproute2`
+
+### 2.1 寻找can模块
+
+执行
+
+```bash
+bash find_all_can_port.sh
+```
+
+输入密码后，如果can模块插入了电脑，并被电脑检测到，输出类似如下：
+
+```bash
+Both ethtool and can-utils are installed.
+Interface can0 is connected to USB port 3-1.4:1.0
+```
+
+如果有多个，输出类似如下：
+
+```bash
+Both ethtool and can-utils are installed.
+Interface can0 is connected to USB port 3-1.4:1.0
+Interface can1 is connected to USB port 3-1.1:1.0
+```
+
+有多少个can模块就会有多少行类似`Interface can1 is connected to USB port 3-1.1:1.0`的输出
+
+其中`can1`是系统找到的can模块名字，`3-1.1:1.0`是该can模块所链接的usb端口
+
+如果之前已经激活过can模块并其名为其它名字，这里假设名字为`can_piper`则输出如下
+
+```bash
+Both ethtool and can-utils are installed.
+Interface can_piper is connected to USB port 3-1.4:1.0
+Interface can0 is connected to USB port 3-1.1:1.0
+```
+
+如果没有检测到can模块，则只会输出如下：
+
+```bash
+Both ethtool and can-utils are installed.
+```
+
+### 2.2 激活单个can模块, **此处使用`can_activate.sh`脚本**
+
+激活单个can模块的情况分两种，一种是电脑只链接了一个can模块，一种是多个can模块插入电脑但是只激活其中一个。
+
+#### 2.2.1 pc只插入一个usb转can模块
 
 直接执行
 
@@ -69,83 +128,94 @@ sudo apt install ros-$ROS_DISTRO-controller-manager
 bash can_activate.sh can0 1000000
 ```
 
-##### 2) pc插入多个usb转can模块， 但每次只激活一个can模块
+此处`can0`可以改为任意名字，`1000000`为波特率，使用机械臂的情况下，不可更改
+
+#### 2.2.2 pc插入多个usb转can模块， 但每次只激活一个can模块
 
 注： 此处用于同时使用机械臂和底盘的的情况
 
 (1) 查看can模块插在usb端口的硬件地址。拔掉所有can模块，只将连接到机械臂的can模块插入PC，执行
 
 ```shell
-sudo ethtool -i can0 | grep bus
+bash find_all_can_port.sh
 ```
 
-并记录下`bus-info`的数值例如`1-2:1.0`
+并记录下`USB port`的数值，例如`3-1.4:1.0`
 
-注：**一般第一个插入的can模块会默认是can0，如果没有查询到can可以使用`bash find_all_can_port.sh`来查看刚才usb地址对应的can名称**
-
-(2) 激活can设备。假设上面的操作记录的`bus-info`数值为`1-2:1.0`，执行：
+(2) 激活can设备。假设上面的`USB port`数值为`3-1.4:1.0`，执行：
 
 ```bash
-bash can_activate.sh can_piper 1000000 "1-2:1.0"
+bash can_activate.sh can_piper 1000000 "3-1.4:1.0"
 ```
 
-注：**1-2:1.0硬件编码的usb端口插入的can设备，名字被重命名为can_piper，波特率为1000000，并激活**
+解释：**3-1.4:1.0硬件编码的usb端口插入的can设备，名字被重命名为can_piper，设定波特率为1000000，并激活**
 
 (3) 检查是否激活成功
 
 执行`ifconfig`查看是否有`can_piper`，如果有则can模块设置成功
 
-#### 2.1.2 同时激活多个can模块，**此处使用`can_config.sh`脚本**
+### 2.3 同时激活多个can模块，**此处使用`can_muti_activate.sh`脚本**
 
-##### 1) 逐个拔插can模块并一一记录每个模块对应的usb口硬件地址
+首先确定有多少个官方can模块被插入到电脑，这里假设是2
 
-在`can_config.sh`中，`EXPECTED_CAN_COUNT`参数为想要激活的can模块数量,现在假设为2
+注：**若当前电脑插入了5个can模块，可以只激活指定的can模块**
 
-然后can模块中的其中一个单独插入PC，执行
+#### 2.3.1 记录每个can模块对应的usb口硬件地址
+
+逐个拔插can模块并一一记录每个模块对应的usb口硬件地址
+
+在`can_muti_activate.sh`中，`USB_PORTS`参数中元素的数量为预激活的can模块数量，现假设为2
+
+(1) 然后can模块中的其中一个单独插入PC，执行
 
 ```shell
-sudo ethtool -i can0 | grep bus
+bash find_all_can_port.sh
 ```
 
-并记录下`bus-info`的数值例如`1-2:1.0`
+并记录下`USB port`的数值，例如`3-1.4:1.0`
 
 (2) 接着插入下一个can模块，注意**不可以**与上次can模块插入的usb口相同，然后执行
 
 ```shell
-sudo ethtool -i can1 | grep bus
+bash find_all_can_port.sh
 ```
 
-注：**一般第一个插入的can模块会默认是can0，第二个为can1，如果没有查询到can可以使用`bash find_all_can_port.sh`来查看刚才usb地址对应的can名称**
+记录下第二个can模块的`USB port`的数值，例如`3-1.1:1.0`
 
-##### 2) 预定义USB 端口、目标接口名称及其比特率
+注：**如果未曾激活过，则第一个插入的can模块会默认是can0，第二个为can1，若激活过，名字为之前激活过的名称**
 
-假设上面的操作记录的`bus-info`数值分别为`1-2:1.0`、`1-4:1.0`，则将下面的`USB_PORTS["1-9:1.0"]="can_left:1000000"`的中括号内部的双引号内部的参数换为`1-2:1.0`和`1-4:1.0`.
+#### 2.3.2 预定义USB 端口、目标接口名称及其比特率
+
+假设上面的操作记录的`USB port`数值分别为`3-1.4:1.0`、`3-1.1:1.0`，则将下面的`USB_PORTS["1-9:1.0"]="can_left:1000000"`的中括号内部的双引号内部的参数换为`3-1.4:1.0`和`3-1.1:1.0`.
 
 最终结果为：
 
-`USB_PORTS["1-2:1.0"]="can_right:1000000"`
+```bash
+USB_PORTS["3-1.4:1.0"]="can_left:1000000"
+USB_PORTS["3-1.1:1.0"]="can_right:1000000"
+```
 
-`USB_PORTS["1-4:1.0"]="can_right:1000000"`
+解释：**3-1.4:1.0硬件编码的usb端口插入的can设备，名字被重命名为can_left，波特率为1000000，并激活**
 
-注：**1-2:1.0硬件编码的usb端口插入的can设备，名字被重命名为can_left，波特率为1000000，并激活**
+#### 2.3.3 激活多个can模块
 
-##### 3) 看终端输出是否激活成功
+执行`bash can_muti_activate.sh`
 
-执行`bash can_config.sh`
-
-##### 4) 查看can是否设置成功
+#### 2.3.4 查看多个can模块是否设置成功
 
 执行`ifconfig`查看是不是有`can_left`和`can_right`
 
-### 2.2 运行节点
+## 3 运行节点
 
 编译
 
 ```shell
+cd piper_ros
 colcon build
+source install/setup.bash
 ```
 
-#### 2.2.1 单个机械臂
+### 3.1 单个机械臂启动控制
 
 节点名`piper_single_ctrl`
 
@@ -167,13 +237,44 @@ gripper_val_mutiple:设置夹爪控制倍数
 
 前者是可以一起将rviz启动，然后可以拖动滑动条控制机械臂
 
-启动控制节点
+启动控制节点，以下几种方式任选一种运行即可
+
+ros2 run 方式
 
 ```shell
 # 启动节点
 ros2 run piper piper_single_ctrl --ros-args -p can_port:=can0 -p auto_enable:=false -p gripper_exist:=true -p gripper_val_mutiple:=2
-# 启动launch
+# 设置日志等级 --log-level DEBUG/INFO/WARN/ERROR
+ros2 run piper piper_single_ctrl --ros-args -p can_port:=can0 -p auto_enable:=false -p gripper_exist:=true -p gripper_val_mutiple:=2 --log-level WARN
+```
+
+`ros2 topic list`
+
+```bash
+/arm_status #机械臂状态，详见下文
+/enable_flag #使能标志位，发送给节点，发送true用来使能
+/end_pose #机械臂末端位姿状态反馈
+/end_pose_stamped #带有时间戳的endpose消息
+/joint_ctrl #机械臂有关控制消息的反馈
+/joint_ctrl_single #订阅关节消息，给这个消息发送关节位置能控制机械臂运动
+/joint_states_single #机械臂关节状态反馈
+/joint_states_feedback #同上，只是修改了topic名字
+/pos_cmd #末端控制消息， xyzrpy，夹爪单位为m，mode1和mode2参数默认0即可
+```
+
+ros2 launch 方式
+
+launch remap了`/joint_ctrl_single`topic，令`/joint_states`为控制机械臂的消息，方便与rviz连通，令rviz能够控制实际机械臂
+
+```shell
+# 启动节点
+ros2 run piper piper_single_ctrl --ros-args -p can_port:=can0 -p auto_enable:=false -p gripper_exist:=true -p gripper_val_mutiple:=2
+# 设置日志等级 --log-level DEBUG/INFO/WARN/ERROR
+ros2 run piper piper_single_ctrl --ros-args -p can_port:=can0 -p auto_enable:=false -p gripper_exist:=true -p gripper_val_mutiple:=2 --log-level WARN
+# 也可以用launch节点
 ros2 launch piper start_single_piper.launch.py can_port:=can0 auto_enable:=false gripper_exist:=false gripper_val_mutiple:=2
+# 增加设定log_level
+ros2 launch piper start_single_piper.launch.py can_port:=can0 auto_enable:=false gripper_exist:=false gripper_val_mutiple:=2 log_level:=warn
 # 或，会以默认参数运行
 ros2 launch piper start_single_piper.launch.py
 # 也可以用rviz开启控制,需要更改的参数如上
@@ -186,9 +287,12 @@ ros2 launch piper start_single_piper_rviz.launch.py
 /arm_status #机械臂状态，详见下文
 /enable_flag #使能标志位，发送给节点，发送true用来使能
 /end_pose #机械臂末端位姿状态反馈
+/end_pose_stamped #带有时间戳的endpose消息
+/joint_ctrl #机械臂有关控制消息的反馈
 /joint_states #订阅关节消息，给这个消息发送关节位置能控制机械臂运动
 /joint_states_single #机械臂关节状态反馈
-/pos_cmd #末端控制消息
+/joint_states_feedback #同上，只是修改了topic名字
+/pos_cmd #末端控制消息， xyzrpy，夹爪单位为m，mode1和mode2参数默认0即可
 ```
 
 ros2 service list
@@ -230,22 +334,141 @@ ros2 topic pub /joint_states sensor_msgs/msg/JointState "{header: {stamp: {sec: 
 
 ```
 
-## 3 注意事项
+### 3.2 单个机械臂启动读取关节消息并在rviz中跟随显示
 
-- 需要先激活can设备，并且设置正确的波特率，才可以读取机械臂消息或者控制机械臂
-- 如果出现
+启动读取关节数据节点
 
-  ```shell
-  使能状态: False
-  <class 'can.exceptions.CanError'> Message NOT sent
-  <class 'can.exceptions.CanError'> Message NOT sent
-  ```
+```bash
+# 有夹爪
+ros2 run piper piper_read_slave_joint --ros-args -p can_port:=can0 -p gripper_exist:=true
+```
 
-  说明机械臂没有与can模块连同，拔插usb后，重新启动机械臂，再激活can模块，然后尝试重新启动节点
+```bash
+# 无夹爪
+ros2 run piper piper_read_slave_joint --ros-args -p can_port:=can0 -p gripper_exist:=false
+```
 
-- 如果打开了自动使能，尝试使能5s没有成功后，会自动退出程序
+执行后仅有一个`/joint_states`用作机械臂消息的反馈
 
-### 3.1 piper自定义消息
+其中有夹爪启动的话消息内容会有`joint7`,`joint8`的数据，这个是为了rviz作为跟随显示功能的时候所需要的
+
+启动rviz显示跟随launch
+
+```bash
+# 有夹爪
+ros2 launch piper_description  display_urdf_follow.launch.py
+```
+
+```bash
+# 无夹爪
+ros2 launch piper_description  display_no_gripper_urdf_follow.launch.py
+```
+
+note:**如果只启动rviz显示，不启动关节数据读取，会导致没有/joint_states数据发布，rviz中的模型的所有link会在原点聚集，无法正常显示**
+
+如果不想启动实机机械臂数据读取节点，可以只启动rviz的显示launch，然后在其他程序中或者终端发布`joint_states`topic，示例如下
+
+```bash
+# 有夹爪
+ros2 topic pub /joint_states sensor_msgs/msg/JointState "header:
+  stamp:
+    sec: 1757669668
+    nanosec: 196177482
+  frame_id: ''
+name: ['joint1','joint2','joint3','joint4','joint5','joint6','gripper','joint7','joint8']
+position: [0,0,0,0,0,0,0,0,0]
+velocity: [0,0,0,0,0,0,0,0,0]
+effort: [0,0,0,0,0,0,0,0,0]" 
+```
+
+```bash
+# 无夹爪
+ros2 topic pub /joint_states sensor_msgs/msg/JointState "header:
+  stamp:
+    sec: 1757669668
+    nanosec: 196177482
+  frame_id: ''
+name: ['joint1','joint2','joint3','joint4','joint5','joint6']
+position: [0,0,0,0,0,0]
+velocity: [0,0,0,0,0,0]
+effort: [0,0,0,0,0,0]" 
+```
+
+注意：**header中的时间戳为必需，否则会导致rviz显示的模型依旧不正常**
+
+### 3.3 同时控制双臂
+
+需要每条臂各自链接一个can模块，然后激活两个can模块
+
+launch内读取的两个can模块名称都为`can0`，需要自行手动修改为左右臂在系统中的名称，查看方法如下：
+
+```bash
+ifconfig -a | grep can
+```
+
+执行双臂启动
+
+```bash
+# 默认是启动两个节点都读取can0消息
+ros2 launch piper start_two_piper.launch.py auto_enable:=false
+# 自定义读取的can端口名称
+ros2 launch piper start_two_piper.launch.py can_left_port:=can_left can_right_port:=can_right auto_enable:=true girpper_exist:=true
+```
+
+- **launch内部做了topic的remap**
+
+```python
+# piper_left_node
+remappings=[
+            # 控制
+            ('pos_cmd', '/pos_cmd_left'),
+            ('joint_ctrl_single', '/joint_ctrl_cmd_left'),
+            # 反馈
+            ('joint_states_single', '/joint_states_left'),
+            ('joint_states_feedback', '/joint_left'),
+            ('joint_ctrl', '/joint_states_ctrl_left'),
+            ('arm_status', '/arm_status_left'),
+            ('end_pose', '/end_pose_left'),
+            ('end_pose_stamped', '/end_pose_stamped_left'),
+        ]
+# piper_right_node
+remappings=[
+            # 控制
+            ('pos_cmd', '/pos_cmd_right'),
+            ('joint_ctrl_single', '/joint_ctrl_cmd_right'),
+            # 反馈
+            ('joint_states_single', '/joint_states_right'),
+            ('joint_states_feedback', '/joint_right'),
+            ('joint_ctrl', '/joint_states_ctrl_right'),
+            ('arm_status', '/arm_status_right'),
+            ('end_pose', '/end_pose_right'),
+            ('end_pose_stamped', '/end_pose_stamped_right'),
+        ]
+```
+
+对照上文单节点的topic说明对应remap后的topic含义
+
+```bash
+/arm_status_left
+/arm_status_right
+/enable_flag
+/end_pose_left
+/end_pose_right
+/end_pose_stamped_left
+/end_pose_stamped_right
+/joint_ctrl_cmd_left
+/joint_ctrl_cmd_right
+/joint_left
+/joint_right
+/joint_states_ctrl_left
+/joint_states_ctrl_right
+/joint_states_left
+/joint_states_right
+/pos_cmd_left
+/pos_cmd_right
+```
+
+### 3.4 piper自定义消息
 
 ros功能包`piper_msgs`
 
@@ -335,14 +558,22 @@ int32 mode1
 int32 mode2
 ```
 
-## 4 Moveit规划器和仿真环境
+## 注意事项
 
-|说明 |文档|
-|---|---|
-|Moveit|[Moveit README](src/piper_moveit/README.md)|
-|仿真|[仿真 README](src/piper_sim/README.md)|
+- 需要先激活can设备，并且设置正确的波特率，才可以读取机械臂消息或者控制机械臂
+- 如果出现
 
-## 5 Q&A
+  ```shell
+  使能状态: False
+  <class 'can.exceptions.CanError'> Message NOT sent
+  <class 'can.exceptions.CanError'> Message NOT sent
+  ```
+
+  说明机械臂没有与can模块连同，拔插usb后，重新启动机械臂，再激活can模块，然后尝试重新启动节点
+
+- 如果打开了自动使能，尝试使能5s没有成功后，会自动退出程序
+
+## Q&A
 
 1. 出现
 
@@ -431,9 +662,13 @@ sudo apt install ros-$ROS_DISTRO-controller-manager
 
 3. 
 
+出现：
+
 ```shell
  "package 'joint_state_publisher_gui' not found
 ```
+
+安装：
 
 ```shell
 sudo apt install ros-$ROS_DISTRO-joint-state-publisher-gui
