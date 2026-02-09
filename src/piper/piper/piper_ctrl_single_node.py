@@ -28,17 +28,20 @@ class PiperRosNode(Node):
         self.declare_parameter('auto_enable', False)
         self.declare_parameter('gripper_exist', True)
         self.declare_parameter('gripper_val_mutiple', 1)
+        self.declare_parameter('joint_name_prefix', '')
 
         self.can_port = self.get_parameter('can_port').get_parameter_value().string_value
         self.auto_enable = self.get_parameter('auto_enable').get_parameter_value().bool_value
         self.gripper_exist = self.get_parameter('gripper_exist').get_parameter_value().bool_value
         self.gripper_val_mutiple = self.get_parameter('gripper_val_mutiple').get_parameter_value().integer_value
+        self.joint_name_prefix = self.get_parameter('joint_name_prefix').get_parameter_value().string_value
         self.gripper_val_mutiple = max(0, min(self.gripper_val_mutiple, 10))
 
         self.get_logger().info(f"can_port is {self.can_port}")
         self.get_logger().info(f"auto_enable is {self.auto_enable}")
         self.get_logger().info(f"gripper_exist is {self.gripper_exist}")
         self.get_logger().info(f"gripper_val_mutiple is {self.gripper_val_mutiple}")
+        self.get_logger().info(f"joint_name_prefix is {self.joint_name_prefix}")
         # Publishers
         self.joint_pub = self.create_publisher(JointState, 'joint_states_single', 1)
         self.joint_feedback_pub = self.create_publisher(JointState, 'joint_states_feedback', 1)
@@ -50,19 +53,19 @@ class PiperRosNode(Node):
         self.motor_srv = self.create_service(Enable, 'enable_srv', self.handle_enable_service)
         # Joint
         self.joint_states = JointState()
-        self.joint_states.name = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6', 'gripper']
+        self.joint_states.name = self._build_joint_names()
         self.joint_states.position = [0.0] * 7
         self.joint_states.velocity = [0.0] * 7
         self.joint_states.effort = [0.0] * 7
 
         self.joint_states_feedback = JointState()
-        self.joint_states_feedback.name = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6', 'gripper']
+        self.joint_states_feedback.name = self._build_joint_names()
         self.joint_states_feedback.position = [0.0] * 7
         self.joint_states_feedback.velocity = [0.0] * 7
         self.joint_states_feedback.effort = [0.0] * 7
         # Joint ctrl
         self.joint_ctrl = JointState()
-        self.joint_ctrl.name = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6', 'gripper']
+        self.joint_ctrl.name = self._build_joint_names()
         self.joint_ctrl.position = [0.0] * 7
         self.joint_ctrl.velocity = [0.0] * 7
         self.joint_ctrl.effort = [0.0] * 7
@@ -82,6 +85,18 @@ class PiperRosNode(Node):
 
     def GetEnableFlag(self):
         return self.__enable_flag
+
+    def _build_joint_names(self):
+        prefix = self.joint_name_prefix or ''
+        return [
+            f"{prefix}joint1",
+            f"{prefix}joint2",
+            f"{prefix}joint3",
+            f"{prefix}joint4",
+            f"{prefix}joint5",
+            f"{prefix}joint6",
+            f"{prefix}joint7",
+        ]
 
     def publish_thread(self):
         """Publish messages from the robotic arm

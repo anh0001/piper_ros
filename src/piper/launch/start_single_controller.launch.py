@@ -42,6 +42,24 @@ def generate_launch_description():
         description='gripper'
     )
 
+    joint_states_topic_arg = DeclareLaunchArgument(
+        'joint_states_topic',
+        default_value='/joint_states',
+        description='JointState feedback topic published by the PiPER driver.'
+    )
+
+    joint_cmd_topic_arg = DeclareLaunchArgument(
+        'joint_cmd_topic',
+        default_value='/piper/joint_cmd',
+        description='JointState command topic consumed by the PiPER driver.'
+    )
+
+    joint_name_prefix_arg = DeclareLaunchArgument(
+        'joint_name_prefix',
+        default_value='piper_',
+        description='Prefix applied to published joint names (e.g., piper_joint1).'
+    )
+
     # Define the node
     piper_node = Node(
         package='piper',
@@ -54,9 +72,11 @@ def generate_launch_description():
             'auto_enable': LaunchConfiguration('auto_enable'),
             'gripper_val_mutiple': LaunchConfiguration('gripper_val_mutiple'),
             'gripper_exist': LaunchConfiguration('gripper_exist'),
+            'joint_name_prefix': LaunchConfiguration('joint_name_prefix'),
         }],
         remappings=[
-            ('joint_ctrl_single', '/joint_states'),
+            ('joint_states_single', LaunchConfiguration('joint_states_topic')),
+            ('joint_ctrl_single', LaunchConfiguration('joint_cmd_topic')),
             # ('joint_states_feedback', '/joint_states'),
         ]
     )
@@ -68,5 +88,8 @@ def generate_launch_description():
         auto_enable_arg,
         gripper_exist_arg,
         gripper_val_mutiple_arg,
+        joint_states_topic_arg,
+        joint_cmd_topic_arg,
+        joint_name_prefix_arg,
         piper_node
     ])
