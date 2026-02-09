@@ -296,14 +296,26 @@ class PiperRosNode(Node):
         joint_6 = 0
 
         # 遍历joint_data.name来映射位置
+        # Handle both naming conventions: 'joint1' and 'piper_joint1'
         for idx, joint_name in enumerate(joint_data.name):
             self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
+            # Store with original name
             joint_positions[joint_name] = round(joint_data.position[idx] * factor)
-        
-        # 获取第7个关节的位置
-        if len(joint_data.position) >= 7:
-            # self.get_logger().info(f"joint_7: {joint_data.position[6]}")
-            joint_6 = round(joint_data.position[6] * 1000 * 1000)
+            # Also store with simplified name (strip 'piper_' prefix if present)
+            if joint_name.startswith('piper_'):
+                simplified_name = joint_name.replace('piper_', '', 1)
+                joint_positions[simplified_name] = round(joint_data.position[idx] * factor)
+
+        # 获取第7个关节的位置 (gripper)
+        # Handle both 'joint7', 'piper_joint7', and 'gripper' naming
+        gripper_pos = None
+        for idx, joint_name in enumerate(joint_data.name):
+            if joint_name in ['joint7', 'piper_joint7', 'gripper']:
+                gripper_pos = joint_data.position[idx]
+                break
+
+        if gripper_pos is not None:
+            joint_6 = round(gripper_pos * 1000 * 1000)
             joint_6 = joint_6 * self.gripper_val_mutiple
 
         # 控制电机速度
@@ -324,6 +336,7 @@ class PiperRosNode(Node):
                 self.piper.MotionCtrl_2(0x01, 0x01, 100)
 
             # 使用关节名称来动态控制关节
+            # Now works with both 'joint1' and 'piper_joint1' naming conventions
             self.piper.JointCtrl(
                 joint_positions.get('joint1', 0),
                 joint_positions.get('joint2', 0),
