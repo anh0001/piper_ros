@@ -97,22 +97,23 @@ class PiperRosNode(Node):
             if(self.auto_enable):
                 while not (enable_flag):
                     elapsed_time = time.time() - start_time
-                    self.get_logger().info("--------------------")
+                    self.get_logger().debug("--------------------")
                     enable_flag = self.piper.GetArmLowSpdInfoMsgs().motor_1.foc_status.driver_enable_status and \
                         self.piper.GetArmLowSpdInfoMsgs().motor_2.foc_status.driver_enable_status and \
                         self.piper.GetArmLowSpdInfoMsgs().motor_3.foc_status.driver_enable_status and \
                         self.piper.GetArmLowSpdInfoMsgs().motor_4.foc_status.driver_enable_status and \
                         self.piper.GetArmLowSpdInfoMsgs().motor_5.foc_status.driver_enable_status and \
                         self.piper.GetArmLowSpdInfoMsgs().motor_6.foc_status.driver_enable_status
-                    self.get_logger().info(f"Enable status:{enable_flag}")
+                    self.get_logger().debug(f"Enable status:{enable_flag}")
                     self.piper.EnableArm(7)
                     self.piper.GripperCtrl(0, 1000, 0x01, 0)
                     if(enable_flag):
                         self.__enable_flag = True
-                    self.get_logger().info("--------------------")
+                        self.get_logger().info("PiPER arm enabled successfully")
+                    self.get_logger().debug("--------------------")
                     # Check if the timeout has been exceeded
                     if elapsed_time > timeout:
-                        self.get_logger().info("Timeout....")
+                        self.get_logger().warn("Auto-enable timeout reached")
                         elapsed_time_flag = True
                         enable_flag = True
                         break
@@ -255,16 +256,16 @@ class PiperRosNode(Node):
             pos_data (): The position data
         """
         factor = 180 / 3.1415926
-        self.get_logger().info(f"Received PosCmd:")
-        self.get_logger().info(f"x: {pos_data.x}")
-        self.get_logger().info(f"y: {pos_data.y}")
-        self.get_logger().info(f"z: {pos_data.z}")
-        self.get_logger().info(f"roll: {pos_data.roll}")
-        self.get_logger().info(f"pitch: {pos_data.pitch}")
-        self.get_logger().info(f"yaw: {pos_data.yaw}")
-        self.get_logger().info(f"gripper: {pos_data.gripper}")
-        self.get_logger().info(f"mode1: {pos_data.mode1}")
-        self.get_logger().info(f"mode2: {pos_data.mode2}")
+        self.get_logger().debug(f"Received PosCmd:")
+        self.get_logger().debug(f"x: {pos_data.x}")
+        self.get_logger().debug(f"y: {pos_data.y}")
+        self.get_logger().debug(f"z: {pos_data.z}")
+        self.get_logger().debug(f"roll: {pos_data.roll}")
+        self.get_logger().debug(f"pitch: {pos_data.pitch}")
+        self.get_logger().debug(f"yaw: {pos_data.yaw}")
+        self.get_logger().debug(f"gripper: {pos_data.gripper}")
+        self.get_logger().debug(f"mode1: {pos_data.mode1}")
+        self.get_logger().debug(f"mode2: {pos_data.mode2}")
         x = round(pos_data.x*1000) * 1000
         y = round(pos_data.y*1000) * 1000
         z = round(pos_data.z*1000) * 1000
@@ -298,7 +299,7 @@ class PiperRosNode(Node):
         # 遍历joint_data.name来映射位置
         # Handle both naming conventions: 'joint1' and 'piper_joint1'
         for idx, joint_name in enumerate(joint_data.name):
-            self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
+            self.get_logger().debug(f"{joint_name}: {joint_data.position[idx]}")
             # Store with original name
             joint_positions[joint_name] = round(joint_data.position[idx] * factor)
             # Also store with simplified name (strip 'piper_' prefix if present)
@@ -367,8 +368,8 @@ class PiperRosNode(Node):
         Args:
             enable_flag (): Boolean flag
         """
-        self.get_logger().info(f"Received enable flag:")
-        self.get_logger().info(f"enable_flag: {enable_flag.data}")
+        self.get_logger().debug(f"Received enable flag:")
+        self.get_logger().debug(f"enable_flag: {enable_flag.data}")
         if enable_flag.data:
             self.__enable_flag = True
             self.piper.EnableArm(7)
@@ -392,7 +393,7 @@ class PiperRosNode(Node):
         start_time = time.time()
         while not loop_flag:
             elapsed_time = time.time() - start_time
-            self.get_logger().info(f"--------------------")
+            self.get_logger().debug(f"--------------------")
             enable_list = []
             enable_list.append(self.piper.GetArmLowSpdInfoMsgs().motor_1.foc_status.driver_enable_status)
             enable_list.append(self.piper.GetArmLowSpdInfoMsgs().motor_2.foc_status.driver_enable_status)
@@ -410,9 +411,9 @@ class PiperRosNode(Node):
                 self.piper.DisableArm(7)
                 self.piper.GripperCtrl(0, 1000, 0x02, 0)
 
-            self.get_logger().info(f"Enable status: {enable_flag}")
+            self.get_logger().debug(f"Enable status: {enable_flag}")
             self.__enable_flag = enable_flag
-            self.get_logger().info(f"--------------------")
+            self.get_logger().debug(f"--------------------")
 
             if enable_flag == req.enable_request:
                 loop_flag = True
