@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
 from builtin_interfaces.msg import Duration
@@ -95,9 +96,14 @@ class PiperFollowJointTrajectoryBridge(Node):
             name: 0.0 for name in self.full_joint_names
         }
 
+        # Use ReentrantCallbackGroup so the state subscription callback
+        # can fire while the action execute callback is waiting.
+        self._cb_group = ReentrantCallbackGroup()
+
         self.command_pub = self.create_publisher(JointState, self.command_topic, 10)
         self.state_sub = self.create_subscription(
-            JointState, self.state_topic, self._state_callback, 10
+            JointState, self.state_topic, self._state_callback, 10,
+            callback_group=self._cb_group,
         )
 
         self.arm_action_server = ActionServer(
@@ -107,6 +113,7 @@ class PiperFollowJointTrajectoryBridge(Node):
             execute_callback=self._execute_arm,
             goal_callback=self._goal_callback_arm,
             cancel_callback=self._cancel_callback,
+            callback_group=self._cb_group,
         )
 
         self.gripper_action_server = ActionServer(
@@ -116,6 +123,7 @@ class PiperFollowJointTrajectoryBridge(Node):
             execute_callback=self._execute_gripper,
             goal_callback=self._goal_callback_gripper,
             cancel_callback=self._cancel_callback,
+            callback_group=self._cb_group,
         )
 
         self.get_logger().info(
@@ -184,10 +192,34 @@ class PiperFollowJointTrajectoryBridge(Node):
         points = self._build_points(traj.points, joint_names)
         total_duration = points[-1][0] if points else 0.0
 
-        rate = self.create_rate(self.publish_rate_hz)
-        start_time = self.get_clock().now()
+        self.get_logger().info(
+            f"Executing trajectory: {len(traj.points)} points, "
+            f"duration={total_duration:.2f}s, joints={joint_names}"
+        )
+        if points:
+            self.get_logger().info(f"First point: {points[0]}")
+            self.get_logger().info(f"Last point: {points[-1]}")
+
+        # PiPER uses CAN-bus position commands with its own internal motion
+        # controller. Send the final target position once; the arm's firmware
+        # handles the trajectory internally.  Then poll joint_states until the
+        # arm reaches the target (or a timeout expires).
+        final_target = points[-1][1] if points else {}
+
+        # Send the target position command once
+        now = self.get_clock().now()
+        self._publish_command(now, final_target)
+        self.get_logger().info("Sent target position to PiPER hardware.")
+
+        # Wait for hardware to reach target.
+        # Requires MultiThreadedExecutor so _state_callback runs while we wait.
+        settle_timeout = max(total_duration * 4.0, 10.0)
+        settle_tolerance = 0.05  # radians
+        settle_start = self.get_clock().now()
+        rate = self.create_rate(5.0)
 
         while rclpy.ok():
+
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
                 result = FollowJointTrajectory.Result()
@@ -198,14 +230,27 @@ class PiperFollowJointTrajectoryBridge(Node):
                 return result
 
             now = self.get_clock().now()
-            elapsed = (now - start_time).nanoseconds / 1e9
-            if elapsed >= total_duration:
-                target = points[-1][1] if points else {}
-                self._publish_command(now, target)
+
+            # Check if hardware reached target
+            reached = True
+            for joint_name, target_pos in final_target.items():
+                current_pos = self.last_positions.get(joint_name, None)
+                if current_pos is None or abs(current_pos - target_pos) > settle_tolerance:
+                    reached = False
+                    break
+
+            if reached:
+                self.get_logger().info("Hardware reached target position.")
                 break
 
-            target = self._interpolate(points, elapsed)
-            self._publish_command(now, target)
+            settle_elapsed = (now - settle_start).nanoseconds / 1e9
+            if settle_elapsed >= settle_timeout:
+                self.get_logger().warn(
+                    f"Settle timeout ({settle_timeout:.1f}s) reached, "
+                    "hardware may not have fully reached target."
+                )
+                break
+
             rate.sleep()
 
         goal_handle.succeed()
@@ -247,8 +292,11 @@ class PiperFollowJointTrajectoryBridge(Node):
                 return interpolated
         return points[-1][1]
 
+    _pub_log_count = 0
+
     def _publish_command(self, now, target: Dict[str, float]) -> None:
-        positions: List[float] = []
+        # Build positions for all 7 joints (arm + gripper)
+        all_positions: List[float] = []
         for joint_name in self.full_joint_names:
             if joint_name in target:
                 value = target[joint_name]
@@ -256,28 +304,43 @@ class PiperFollowJointTrajectoryBridge(Node):
                 value = self.last_command_positions[joint_name]
             else:
                 value = self.last_positions.get(joint_name, 0.0)
-            positions.append(value)
+            all_positions.append(value)
+
+        # Send only the 6 arm joints (matching the format that works with
+        # piper_ctrl_single_node). The driver handles MotionCtrl_2 speed
+        # automatically when velocity is empty.
+        arm_names = list(self.full_joint_names[:6])
+        arm_positions = all_positions[:6]
 
         cmd = JointState()
         cmd.header.stamp = now.to_msg()
-        cmd.name = list(self.full_joint_names)
-        cmd.position = positions
-        cmd.velocity = [0.0] * len(self.full_joint_names)
-        if cmd.velocity:
-            cmd.velocity[-1] = float(self.default_speed)
-        cmd.effort = [0.0] * len(self.full_joint_names)
+        cmd.name = arm_names
+        cmd.position = arm_positions
+        # Leave velocity and effort empty — driver defaults to speed 100%
+
+        if self._pub_log_count < 3:
+            pos_str = ", ".join(f"{p:.4f}" for p in arm_positions)
+            self.get_logger().info(
+                f"CMD#{self._pub_log_count}: names={arm_names}, "
+                f"pos=[{pos_str}]"
+            )
+            self._pub_log_count += 1
 
         self.command_pub.publish(cmd)
 
         for idx, name in enumerate(self.full_joint_names):
-            self.last_command_positions[name] = positions[idx]
+            self.last_command_positions[name] = all_positions[idx]
 
 
 def main() -> None:
     rclpy.init()
     node = PiperFollowJointTrajectoryBridge()
+    # MultiThreadedExecutor allows joint state callbacks to run
+    # while the action execute callback is waiting for the arm to settle.
+    executor = rclpy.executors.MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
