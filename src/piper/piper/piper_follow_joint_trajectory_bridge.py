@@ -95,6 +95,7 @@ class PiperFollowJointTrajectoryBridge(Node):
         self.last_command_positions: Dict[str, float] = {
             name: 0.0 for name in self.full_joint_names
         }
+        self._state_received = False
 
         # Use ReentrantCallbackGroup so the state subscription callback
         # can fire while the action execute callback is waiting.
@@ -132,6 +133,7 @@ class PiperFollowJointTrajectoryBridge(Node):
         )
 
     def _state_callback(self, msg: JointState) -> None:
+        self._state_received = True
         for idx, name in enumerate(msg.name):
             if name in self.last_positions and idx < len(msg.position):
                 self.last_positions[name] = msg.position[idx]
@@ -300,28 +302,32 @@ class PiperFollowJointTrajectoryBridge(Node):
         for joint_name in self.full_joint_names:
             if joint_name in target:
                 value = target[joint_name]
-            elif joint_name in self.last_command_positions:
-                value = self.last_command_positions[joint_name]
+            elif self._state_received and joint_name in self.last_positions:
+                value = self.last_positions[joint_name]
             else:
-                value = self.last_positions.get(joint_name, 0.0)
+                value = self.last_command_positions.get(joint_name, 0.0)
             all_positions.append(value)
 
-        # Send only the 6 arm joints (matching the format that works with
-        # piper_ctrl_single_node). The driver handles MotionCtrl_2 speed
-        # automatically when velocity is empty.
-        arm_names = list(self.full_joint_names[:6])
-        arm_positions = all_positions[:6]
+        # Always include the 6 arm joints. Include gripper when it is part of
+        # the target so the driver can actuate it.
+        publish_gripper = self.full_joint_names[6] in target
+        if publish_gripper:
+            cmd_names = list(self.full_joint_names)
+            cmd_positions = all_positions
+        else:
+            cmd_names = list(self.full_joint_names[:6])
+            cmd_positions = all_positions[:6]
 
         cmd = JointState()
         cmd.header.stamp = now.to_msg()
-        cmd.name = arm_names
-        cmd.position = arm_positions
+        cmd.name = cmd_names
+        cmd.position = cmd_positions
         # Leave velocity and effort empty — driver defaults to speed 100%
 
         if self._pub_log_count < 3:
-            pos_str = ", ".join(f"{p:.4f}" for p in arm_positions)
+            pos_str = ", ".join(f"{p:.4f}" for p in cmd_positions)
             self.get_logger().info(
-                f"CMD#{self._pub_log_count}: names={arm_names}, "
+                f"CMD#{self._pub_log_count}: names={cmd_names}, "
                 f"pos=[{pos_str}]"
             )
             self._pub_log_count += 1
