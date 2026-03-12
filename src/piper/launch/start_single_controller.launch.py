@@ -24,6 +24,12 @@ def generate_launch_description():
         description='Automatically enable the Piper node.'
     )
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation clock.'
+    )
+
     rviz_ctrl_flag_arg = DeclareLaunchArgument(
         'rviz_ctrl_flag',
         default_value='false',
@@ -70,6 +76,7 @@ def generate_launch_description():
         parameters=[{
             'can_port': LaunchConfiguration('can_port'),
             'auto_enable': LaunchConfiguration('auto_enable'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
             'gripper_val_mutiple': LaunchConfiguration('gripper_val_mutiple'),
             'gripper_exist': LaunchConfiguration('gripper_exist'),
             'joint_name_prefix': LaunchConfiguration('joint_name_prefix'),
@@ -86,6 +93,7 @@ def generate_launch_description():
         log_level_arg,
         can_port_arg,
         auto_enable_arg,
+        use_sim_time_arg,
         gripper_exist_arg,
         gripper_val_mutiple_arg,
         joint_states_topic_arg,

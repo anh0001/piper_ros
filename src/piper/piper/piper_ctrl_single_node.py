@@ -180,10 +180,8 @@ class PiperRosNode(Node):
         return ros_time
 
     def PublishArmJointAndGripper(self):
-        # Assign timestamp
-        # self.joint_states.header.stamp = self.get_clock().now().to_msg()
-        new_time = max(self.piper.GetArmJointMsgs().time_stamp, self.piper.GetArmHighSpdInfoMsgs().time_stamp)
-        self.joint_states.header.stamp = self.float_to_ros_time(new_time)
+        # Use ROS time to keep TF timestamps consistent with the rest of the graph.
+        self.joint_states.header.stamp = self.get_clock().now().to_msg()
         # Here, you can set the joint positions to any value you want
         # The raw data obtained is in degrees multiplied by 1000. To convert to radians, divide by 1000, multiply by π/180, and limit to 5 decimal places
         joint_0: float = (self.piper.GetArmJointMsgs().joint_state.joint_1 / 1000) * 0.017444
@@ -222,9 +220,7 @@ class PiperRosNode(Node):
             self.joint_pub.publish(self.joint_states)
 
     def PublishArmCtrlAndGripper(self):
-        # self.joint_ctrl.header.stamp = self.get_clock().now().to_msg()
-        new_time = max(self.piper.GetArmJointCtrl().time_stamp, self.piper.GetArmGripperCtrl().time_stamp)
-        self.joint_ctrl.header.stamp = self.float_to_ros_time(new_time)
+        self.joint_ctrl.header.stamp = self.get_clock().now().to_msg()
         joint_0: float = (self.piper.GetArmJointCtrl().joint_ctrl.joint_1/1000) * 0.017444
         joint_1: float = (self.piper.GetArmJointCtrl().joint_ctrl.joint_2/1000) * 0.017444
         joint_2: float = (self.piper.GetArmJointCtrl().joint_ctrl.joint_3/1000) * 0.017444
@@ -239,7 +235,6 @@ class PiperRosNode(Node):
             self.joint_ctrl_pub.publish(self.joint_ctrl)
     
     def PublishArmEndPose(self):
-        new_time = self.piper.GetArmEndPoseMsgs().time_stamp
         # End effector pose
         endpos = Pose()
         endpos.position.x = self.piper.GetArmEndPoseMsgs().end_pose.X_axis / 1000000
@@ -260,8 +255,7 @@ class PiperRosNode(Node):
         #  时间戳的endpose
         end_pos_stamp = PoseStamped()
         end_pos_stamp.pose = endpos
-        end_pos_stamp.header.stamp = self.float_to_ros_time(new_time)
-        # end_pos_stamp.header.stamp = self.get_clock().now().to_msg()
+        end_pos_stamp.header.stamp = self.get_clock().now().to_msg()
         self.end_pose_stamped_pub.publish(end_pos_stamp)
 
     def pos_callback(self, pos_data):
