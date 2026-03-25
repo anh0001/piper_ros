@@ -2,8 +2,9 @@
 """
 FollowJointTrajectory bridge for PiPER.
 
-Exposes FollowJointTrajectory action servers and publishes JointState commands
-to the PiPER driver while using real joint state feedback from hardware.
+Exposes FollowJointTrajectory action servers and a GripperCommand action server,
+then publishes JointState commands to the PiPER driver while using real joint
+state feedback from hardware.
 """
 
 import math
@@ -15,7 +16,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
 from builtin_interfaces.msg import Duration
-from control_msgs.action import FollowJointTrajectory
+from control_msgs.action import FollowJointTrajectory, GripperCommand
 from sensor_msgs.msg import JointState
 
 
@@ -35,10 +36,19 @@ class PiperFollowJointTrajectoryBridge(Node):
             "gripper_action_name",
             "/piper_gripper_controller/follow_joint_trajectory",
         )
+        self.declare_parameter(
+            "gripper_cmd_action_name",
+            "/piper_gripper_controller/gripper_cmd",
+        )
         self.declare_parameter("command_topic", "/piper/joint_cmd")
         self.declare_parameter("state_topic", "/joint_states")
         self.declare_parameter("publish_rate_hz", 50.0)
         self.declare_parameter("default_speed", 30)
+        self.declare_parameter("gripper_goal_tolerance", 0.01)
+        self.declare_parameter("gripper_progress_epsilon", 0.002)
+        self.declare_parameter("gripper_no_progress_timeout_sec", 0.75)
+        self.declare_parameter("gripper_max_execution_sec", 2.0)
+        self.declare_parameter("gripper_republish_period_sec", 0.25)
         self.declare_parameter("joint_name_prefix", "piper_")
         self.declare_parameter(
             "joint_names",
@@ -50,6 +60,9 @@ class PiperFollowJointTrajectoryBridge(Node):
         )
         self.gripper_action_name = (
             self.get_parameter("gripper_action_name").get_parameter_value().string_value
+        )
+        self.gripper_cmd_action_name = (
+            self.get_parameter("gripper_cmd_action_name").get_parameter_value().string_value
         )
         self.command_topic = (
             self.get_parameter("command_topic").get_parameter_value().string_value
@@ -64,6 +77,36 @@ class PiperFollowJointTrajectoryBridge(Node):
             self.get_parameter("default_speed").get_parameter_value().integer_value
         )
         self.default_speed = max(1, min(self.default_speed, 100))
+        self.gripper_goal_tolerance = max(
+            1e-4,
+            self.get_parameter("gripper_goal_tolerance")
+            .get_parameter_value()
+            .double_value,
+        )
+        self.gripper_progress_epsilon = max(
+            1e-5,
+            self.get_parameter("gripper_progress_epsilon")
+            .get_parameter_value()
+            .double_value,
+        )
+        self.gripper_no_progress_timeout_sec = max(
+            0.1,
+            self.get_parameter("gripper_no_progress_timeout_sec")
+            .get_parameter_value()
+            .double_value,
+        )
+        self.gripper_max_execution_sec = max(
+            self.gripper_no_progress_timeout_sec,
+            self.get_parameter("gripper_max_execution_sec")
+            .get_parameter_value()
+            .double_value,
+        )
+        self.gripper_republish_period_sec = max(
+            0.05,
+            self.get_parameter("gripper_republish_period_sec")
+            .get_parameter_value()
+            .double_value,
+        )
         self.joint_name_prefix = (
             self.get_parameter("joint_name_prefix").get_parameter_value().string_value
         )
@@ -90,6 +133,9 @@ class PiperFollowJointTrajectoryBridge(Node):
             )
 
         self.last_positions: Dict[str, float] = {
+            name: 0.0 for name in self.full_joint_names
+        }
+        self.last_efforts: Dict[str, float] = {
             name: 0.0 for name in self.full_joint_names
         }
         self.last_command_positions: Dict[str, float] = {
@@ -127,9 +173,20 @@ class PiperFollowJointTrajectoryBridge(Node):
             callback_group=self._cb_group,
         )
 
+        self.gripper_cmd_action_server = ActionServer(
+            self,
+            GripperCommand,
+            self.gripper_cmd_action_name,
+            execute_callback=self._execute_gripper_cmd,
+            goal_callback=lambda _: GoalResponse.ACCEPT,
+            cancel_callback=self._cancel_callback,
+            callback_group=self._cb_group,
+        )
+
         self.get_logger().info(
-            f"PiPER FollowJointTrajectory bridge ready: arm={self.arm_action_name}, "
-            f"gripper={self.gripper_action_name}"
+            f"PiPER bridge ready: arm={self.arm_action_name}, "
+            f"gripper_fjt={self.gripper_action_name}, "
+            f"gripper_cmd={self.gripper_cmd_action_name}"
         )
 
     def _state_callback(self, msg: JointState) -> None:
@@ -137,6 +194,8 @@ class PiperFollowJointTrajectoryBridge(Node):
         for idx, name in enumerate(msg.name):
             if name in self.last_positions and idx < len(msg.position):
                 self.last_positions[name] = msg.position[idx]
+            if name in self.last_efforts and idx < len(msg.effort):
+                self.last_efforts[name] = msg.effort[idx]
 
     def _cancel_callback(self, _goal_handle) -> CancelResponse:
         return CancelResponse.ACCEPT
@@ -186,6 +245,200 @@ class PiperFollowJointTrajectoryBridge(Node):
     def _execute_gripper(self, goal_handle):
         allowed = [self.full_joint_names[6]]
         return self._execute(goal_handle, allowed)
+
+    def _execute_gripper_cmd(self, goal_handle):
+        """Handle GripperCommand action — send position directly, no planning."""
+        goal = goal_handle.request
+        target_position = goal.command.position
+        gripper_joint = self.full_joint_names[6]
+        start_pos = (
+            self.last_positions.get(gripper_joint, None) if self._state_received else None
+        )
+        self.get_logger().info(
+            f"GripperCommand: moving {gripper_joint} from {start_pos} to {target_position:.4f}"
+        )
+
+        now = self.get_clock().now()
+        self._publish_command(now, {gripper_joint: target_position})
+        start_time = self.get_clock().now()
+        last_progress_time = start_time
+        last_progress_pos = start_pos
+        last_publish_time = start_time
+        significant_motion_threshold = max(
+            self.gripper_goal_tolerance,
+            self.gripper_progress_epsilon * 5.0,
+        )
+        rate = self.create_rate(20.0)
+
+        while rclpy.ok():
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                return self._build_gripper_result(
+                    gripper_joint,
+                    stalled=False,
+                    reached_goal=False,
+                )
+
+            current_time = self.get_clock().now()
+            elapsed = (current_time - start_time).nanoseconds / 1e9
+            current_pos = (
+                self.last_positions.get(gripper_joint, None)
+                if self._state_received
+                else None
+            )
+            delta = None if current_pos is None else abs(current_pos - target_position)
+
+            if delta is not None and delta <= self.gripper_goal_tolerance:
+                self.get_logger().info(
+                    "GripperCommand succeeded: "
+                    f"start={self._format_float(start_pos)} "
+                    f"current={self._format_float(current_pos)} "
+                    f"target={target_position:.4f} "
+                    f"delta={delta:.4f} elapsed={elapsed:.3f}s"
+                )
+                goal_handle.succeed()
+                return self._build_gripper_result(
+                    gripper_joint,
+                    stalled=False,
+                    reached_goal=True,
+                )
+
+            if current_pos is not None:
+                if last_progress_pos is None:
+                    last_progress_pos = current_pos
+                    last_progress_time = current_time
+                elif abs(current_pos - last_progress_pos) >= self.gripper_progress_epsilon:
+                    last_progress_pos = current_pos
+                    last_progress_time = current_time
+
+            since_progress = (current_time - last_progress_time).nanoseconds / 1e9
+            made_directional_progress = self._made_directional_progress(
+                start_pos,
+                current_pos,
+                target_position,
+                significant_motion_threshold,
+            )
+
+            if elapsed >= self.gripper_max_execution_sec:
+                if made_directional_progress:
+                    self.get_logger().warn(
+                        "GripperCommand timed out after directional progress: "
+                        f"start={self._format_float(start_pos)} "
+                        f"current={self._format_float(current_pos)} "
+                        f"target={target_position:.4f} "
+                        f"delta={self._format_delta(delta)} elapsed={elapsed:.3f}s; "
+                        "treating as success at mechanical limit or model mismatch"
+                    )
+                    goal_handle.succeed()
+                    return self._build_gripper_result(
+                        gripper_joint,
+                        stalled=True,
+                        reached_goal=False,
+                    )
+                self.get_logger().warn(
+                    "GripperCommand timeout: "
+                    f"start={self._format_float(start_pos)} "
+                    f"current={self._format_float(current_pos)} "
+                    f"target={target_position:.4f} "
+                    f"delta={self._format_delta(delta)} elapsed={elapsed:.3f}s; "
+                    "target may be out of hardware range or blocked"
+                )
+                goal_handle.abort()
+                return self._build_gripper_result(
+                    gripper_joint,
+                    stalled=False,
+                    reached_goal=False,
+                )
+
+            if since_progress >= self.gripper_no_progress_timeout_sec:
+                if made_directional_progress:
+                    self.get_logger().warn(
+                        "GripperCommand stalled after directional progress: "
+                        f"start={self._format_float(start_pos)} "
+                        f"current={self._format_float(current_pos)} "
+                        f"target={target_position:.4f} "
+                        f"delta={self._format_delta(delta)} elapsed={elapsed:.3f}s; "
+                        "treating as success at mechanical limit or model mismatch"
+                    )
+                    goal_handle.succeed()
+                    return self._build_gripper_result(
+                        gripper_joint,
+                        stalled=True,
+                        reached_goal=False,
+                    )
+                self.get_logger().warn(
+                    "GripperCommand stalled: "
+                    f"start={self._format_float(start_pos)} "
+                    f"current={self._format_float(current_pos)} "
+                    f"target={target_position:.4f} "
+                    f"delta={self._format_delta(delta)} elapsed={elapsed:.3f}s; "
+                    "target may be out of hardware range or blocked"
+                )
+                goal_handle.abort()
+                return self._build_gripper_result(
+                    gripper_joint,
+                    stalled=True,
+                    reached_goal=False,
+                )
+
+            republish_elapsed = (
+                current_time - last_publish_time
+            ).nanoseconds / 1e9
+            if republish_elapsed >= self.gripper_republish_period_sec:
+                self._publish_command(current_time, {gripper_joint: target_position})
+                last_publish_time = current_time
+
+            rate.sleep()
+
+        goal_handle.abort()
+        return self._build_gripper_result(
+            gripper_joint,
+            stalled=False,
+            reached_goal=False,
+        )
+
+    def _build_gripper_result(
+        self,
+        gripper_joint: str,
+        *,
+        stalled: bool,
+        reached_goal: bool,
+    ):
+        result = GripperCommand.Result()
+        result.position = self.last_positions.get(gripper_joint, 0.0)
+        result.effort = self.last_efforts.get(gripper_joint, 0.0)
+        result.stalled = stalled
+        result.reached_goal = reached_goal
+        return result
+
+    def _format_float(self, value) -> str:
+        if value is None:
+            return "None"
+        return f"{value:.4f}"
+
+    def _format_delta(self, value) -> str:
+        if value is None:
+            return "None"
+        return f"{value:.4f}"
+
+    def _made_directional_progress(
+        self,
+        start_pos,
+        current_pos,
+        target_position: float,
+        threshold: float,
+    ) -> bool:
+        if start_pos is None or current_pos is None:
+            return False
+
+        direction = target_position - start_pos
+        if abs(direction) < threshold:
+            return False
+
+        moved = current_pos - start_pos
+        if direction > 0.0:
+            return moved >= threshold
+        return moved <= -threshold
 
     def _execute(self, goal_handle, allowed_joints: List[str]):
         goal = goal_handle.request
