@@ -575,7 +575,13 @@ class PiperFollowJointTrajectoryBridge(Node):
         cmd.header.stamp = now.to_msg()
         cmd.name = cmd_names
         cmd.position = cmd_positions
-        # Leave velocity and effort empty — driver defaults to speed 100%
+        # Publish the PiPER global speed (1-100%) in velocity[6] so the driver
+        # uses it: empty velocity makes the driver default to MotionCtrl_2(...,100)
+        # = full speed, which is why MoveIt velocity_scaling had no effect. We
+        # always publish all 7 joints (gripper held), so index 6 is valid.
+        cmd.velocity = [0.0] * len(cmd_positions)
+        if len(cmd.velocity) >= 7:
+            cmd.velocity[6] = float(self.default_speed)
 
         if self._pub_log_count < 3:
             pos_str = ", ".join(f"{p:.4f}" for p in cmd_positions)
