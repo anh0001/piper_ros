@@ -77,6 +77,16 @@ class PiperFollowJointTrajectoryBridge(Node):
             self.get_parameter("default_speed").get_parameter_value().integer_value
         )
         self.default_speed = max(1, min(self.default_speed, 100))
+        # Allow live tuning of the PiPER speed (1-100%) via `ros2 param set`.
+        from rcl_interfaces.msg import SetParametersResult
+
+        def _on_set_params(params):
+            for p in params:
+                if p.name == "default_speed":
+                    self.default_speed = max(1, min(int(p.value), 100))
+                    self.get_logger().info(f"default_speed -> {self.default_speed}%")
+            return SetParametersResult(successful=True)
+        self.add_on_set_parameters_callback(_on_set_params)
         self.gripper_goal_tolerance = max(
             1e-4,
             self.get_parameter("gripper_goal_tolerance")
