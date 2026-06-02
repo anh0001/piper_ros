@@ -561,15 +561,15 @@ class PiperFollowJointTrajectoryBridge(Node):
                 value = self.last_command_positions.get(joint_name, 0.0)
             all_positions.append(value)
 
-        # Always include the 6 arm joints. Include gripper when it is part of
-        # the target so the driver can actuate it.
-        publish_gripper = self.full_joint_names[6] in target
-        if publish_gripper:
-            cmd_names = list(self.full_joint_names)
-            cmd_positions = all_positions
-        else:
-            cmd_names = list(self.full_joint_names[:6])
-            cmd_positions = all_positions[:6]
+        # Always publish all 7 joints. The driver (piper_ctrl_single_node_new)
+        # runs GripperCtrl(joint_6) on EVERY command, and joint_6 defaults to 0
+        # when the command carries < 7 positions -- so a 6-joint arm-only command
+        # slams the gripper shut mid-motion. By always sending the gripper at its
+        # held position (last_positions[gripper], filled above), the driver gets
+        # joint_6 = current gripper angle and holds it open during an arm move.
+        publish_gripper = True
+        cmd_names = list(self.full_joint_names)
+        cmd_positions = all_positions
 
         cmd = JointState()
         cmd.header.stamp = now.to_msg()
