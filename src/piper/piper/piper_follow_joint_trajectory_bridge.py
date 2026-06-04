@@ -8,6 +8,7 @@ state feedback from hardware.
 """
 
 import math
+import time
 from typing import Dict, List, Tuple
 
 import rclpy
@@ -278,7 +279,10 @@ class PiperFollowJointTrajectoryBridge(Node):
             self.gripper_goal_tolerance,
             self.gripper_progress_epsilon * 5.0,
         )
-        rate = self.create_rate(20.0)
+        # plain time.sleep instead of rclpy create_rate(): the Rate object leaks
+        # a ROS timer per goal (never destroy_rate'd) and busy-waits under the
+        # MultiThreadedExecutor, burning CPU.
+        _loop_period = 1.0 / 20.0
 
         while rclpy.ok():
             if goal_handle.is_cancel_requested:
@@ -398,7 +402,7 @@ class PiperFollowJointTrajectoryBridge(Node):
                 self._publish_command(current_time, {gripper_joint: target_position})
                 last_publish_time = current_time
 
-            rate.sleep()
+            time.sleep(_loop_period)
 
         goal_handle.abort()
         return self._build_gripper_result(
@@ -481,7 +485,7 @@ class PiperFollowJointTrajectoryBridge(Node):
         settle_timeout = max(total_duration * 4.0, 10.0)
         settle_tolerance = 0.05  # radians
         settle_start = self.get_clock().now()
-        rate = self.create_rate(5.0)
+        _loop_period = 1.0 / 5.0
 
         while rclpy.ok():
 
@@ -516,7 +520,7 @@ class PiperFollowJointTrajectoryBridge(Node):
                 )
                 break
 
-            rate.sleep()
+            time.sleep(_loop_period)
 
         goal_handle.succeed()
         result = FollowJointTrajectory.Result()
@@ -612,7 +616,10 @@ def main() -> None:
     node = PiperFollowJointTrajectoryBridge()
     # MultiThreadedExecutor allows joint state callbacks to run
     # while the action execute callback is waiting for the arm to settle.
-    executor = rclpy.executors.MultiThreadedExecutor()
+    # Cap at 2 threads: default uses cpu_count() (~24 here) — one action execute
+    # callback + one for subscriptions/cancel/service is enough; the extra ~22
+    # idle worker threads only add scheduling overhead.
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)
     try:
         executor.spin()

@@ -29,12 +29,17 @@ class PiperRosNode(Node):
         self.declare_parameter('gripper_exist', True)
         self.declare_parameter('gripper_val_mutiple', 1)
         self.declare_parameter('joint_name_prefix', '')
+        # Steady-state feedback publish rate. Was a hardcoded 200Hz Python loop
+        # (republishing state + scipy quaternion math every tick) that burned a
+        # full CPU core at idle and starved the perception/servo pipeline.
+        self.declare_parameter('publish_rate_hz', 50.0)
 
         self.can_port = self.get_parameter('can_port').get_parameter_value().string_value
         self.auto_enable = self.get_parameter('auto_enable').get_parameter_value().bool_value
         self.gripper_exist = self.get_parameter('gripper_exist').get_parameter_value().bool_value
         self.gripper_val_mutiple = self.get_parameter('gripper_val_mutiple').get_parameter_value().integer_value
         self.joint_name_prefix = self.get_parameter('joint_name_prefix').get_parameter_value().string_value
+        self.publish_rate_hz = max(1.0, self.get_parameter('publish_rate_hz').get_parameter_value().double_value)
         self.gripper_val_mutiple = max(0, min(self.gripper_val_mutiple, 10))
 
         self.get_logger().info(f"can_port is {self.can_port}")
@@ -101,7 +106,10 @@ class PiperRosNode(Node):
     def publish_thread(self):
         """Publish messages from the robotic arm
         """
-        rate = self.create_rate(200)  # 200 Hz
+        # plain time.sleep, NOT rclpy create_rate(): rate.sleep() busy-waits in
+        # this dedicated thread (the executor doesn't service its timer here),
+        # pinning a CPU core regardless of the rate. Was a hardcoded 200 Hz loop.
+        _publish_period = 1.0 / self.publish_rate_hz
         enable_flag = False
         # Set timeout (seconds)
         timeout = 5
@@ -148,7 +156,7 @@ class PiperRosNode(Node):
                 self.get_logger().error(f"exit...")
                 rclpy.shutdown() 
 
-            rate.sleep()
+            time.sleep(_publish_period)
 
     def PublishArmState(self):
         arm_status = PiperStatusMsg()
